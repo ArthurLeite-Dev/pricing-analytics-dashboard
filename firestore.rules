@@ -1,0 +1,42 @@
+rules_version = '2';
+
+// Modelo de segurança:
+// - Leitura: qualquer usuário autenticado pode ler products/alerts (o
+//   dashboard é privado, mas compartilhado entre os usuários da conta).
+// - Escrita de preço/coleta (currentPrice, status, priceHistory, alerts):
+//   feita SOMENTE pelo Admin SDK (script Python + API Node/Express), que
+//   roda com uma service account e por isso IGNORA estas regras. Por isso
+//   o cliente (front-end) não tem permissão de escrever esses campos.
+// - O usuário autenticado pode ajustar o `targetPrice` de um produto e
+//   marcar um alerta como lido (`read`) diretamente do front-end.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create: if false; // criação só via API Node (Admin SDK)
+      allow update: if isSignedIn() && onlyUpdatingFields(["targetPrice"]);
+      allow delete: if false; // exclusão só via API Node (Admin SDK)
+
+      match /priceHistory/{entryId} {
+        allow read: if isSignedIn();
+        allow write: if false; // histórico é gravado só pelo scraper Python
+      }
+    }
+
+    match /alerts/{alertId} {
+      allow read: if isSignedIn();
+      allow create: if false; // alertas são criados só pelo scraper Python
+      allow update: if isSignedIn() && onlyUpdatingFields(["read"]);
+      allow delete: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function onlyUpdatingFields(allowedFields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFields);
+    }
+  }
+}
