@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -113,14 +114,22 @@ def _to_float(raw: Optional[str]) -> Optional[float]:
 
 def parse_price(soup: BeautifulSoup) -> Optional[float]:
     """
-    Extrai o preço da página.
+    Extrai o preço da página, tentando nesta ordem:
+    1) JSON-LD (dado estruturado padrão schema.org — o mais confiável,
+       muito usado por lojas Next.js/React para SEO, ex: KaBuM!, Magalu)
+    2) meta tags de e-commerce (Open Graph / schema.org)
+    3) seletores CSS genéricos (fallback, quando nada acima existe)
 
-    IMPORTANTE: os seletores abaixo são um PONTO DE PARTIDA genérico
-    (meta tags de e-commerce + classes/atributos comuns). Cada loja
-    estrutura o HTML de um jeito, então inspecione o DOM real de cada
-    site-alvo (botão direito > Inspecionar) e ajuste/adicione seletores
-    específicos quando o valor não for encontrado corretamente.
+    IMPORTANTE: os seletores CSS do passo 3 são um PONTO DE PARTIDA
+    genérico. Cada loja estrutura o HTML de um jeito, então inspecione o
+    DOM real de cada site-alvo (botão direito > Inspecionar) e
+    ajuste/adicione seletores específicos quando o valor não for
+    encontrado corretamente.
     """
+    price = _price_from_jsonld(soup)
+    if price is not None:
+        return price
+
     meta_price = soup.find("meta", attrs={"property": "product:price:amount"}) or soup.find(
         "meta", attrs={"itemprop": "price"}
     )
@@ -140,6 +149,62 @@ def parse_price(soup: BeautifulSoup) -> Optional[float]:
             return value
 
     return None
+
+
+def _price_from_jsonld(soup: BeautifulSoup) -> Optional[float]:
+    """Procura um bloco <script type="application/ld+json"> com schema.org
+    Product/Offer e extrai o preço de dentro dele."""
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            data = json.loads(script.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        price = _extract_price_from_jsonld(data)
+        if price is not None:
+            return price
+    return None
+
+
+def _extract_price_from_jsonld(data) -> Optional[float]:
+    if isinstance(data, list):
+        for item in data:
+            price = _extract_price_from_jsonld(item)
+            if price is not None:
+                return price
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    if "@graph" in data:
+        price = _extract_price_from_jsonld(data["@graph"])
+        if price is not None:
+            return price
+
+    offers = data.get("offers")
+    if isinstance(offers, list):
+        offers = offers[0] if offers else None
+    if isinstance(offers, dict):
+        raw = offers.get("price") or offers.get("lowPrice")
+        if raw is not None:
+            return _jsonld_price_to_float(raw)
+
+    if "price" in data:
+        return _jsonld_price_to_float(data["price"])
+
+    return None
+
+
+def _jsonld_price_to_float(raw) -> Optional[float]:
+    """Preços em JSON-LD já vêm em formato numérico puro (schema.org),
+    ex: "239.99" — ao contrário do formato brasileiro visível na página
+    (239,99), por isso NÃO usa o mesmo parser de _to_float."""
+    if raw is None:
+        return None
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        return None
 
 
 def parse_product_info(soup: BeautifulSoup) -> tuple[Optional[str], Optional[str]]:
