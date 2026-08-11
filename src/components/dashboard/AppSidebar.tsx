@@ -1,9 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Package, BellRing, Settings, LineChart } from "lucide-react";
+import { LayoutDashboard, Package, BellRing, Settings, LineChart, LogOut } from "lucide-react";
+import { signOut } from "firebase/auth";
 
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -13,6 +15,8 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { auth } from "@/lib/firebase";
+import { useAuth } from "@/hooks/useAuth";
 
 const items = [
   { title: "Visão Geral", url: "/", icon: LayoutDashboard },
@@ -25,6 +29,7 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const pathname = useRouterState({ select: (r) => r.location.pathname });
+  const { user } = useAuth();
 
   return (
     <Sidebar collapsible="icon">
@@ -60,6 +65,21 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="px-3 py-3">
+        {user && (
+          <div className="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-border/70 bg-secondary/40 px-2 py-2">
+            {!collapsed && <span className="truncate text-xs text-muted-foreground">{user.email}</span>}
+            <button
+              type="button"
+              onClick={() => auth && signOut(auth)}
+              title="Sair"
+              className="grid shrink-0 size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <LogOut className="size-4" />
+            </button>
+          </div>
+        )}
+      </SidebarFooter>
     </Sidebar>
   );
 }

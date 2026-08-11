@@ -8,11 +8,14 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { type ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 
 import appCss from "../styles.css?url";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { AppSidebar } from "@/components/dashboard/AppSidebar";
+import { LoginForm } from "@/components/auth/LoginForm";
+import { useAuth } from "@/hooks/useAuth";
 
 function NotFoundComponent() {
   return (
@@ -119,19 +122,28 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const { user, loading } = useAuth();
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SidebarProvider>
-        <div className="flex min-h-screen w-full bg-background">
-          <AppSidebar />
-          <div className="min-w-0 flex-1">
-            {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-            <Outlet />
-          </div>
+      {loading ? (
+        <div className="flex min-h-screen items-center justify-center bg-background">
+          <Loader2 className="size-6 animate-spin text-muted-foreground" />
         </div>
-        <Toaster />
-      </SidebarProvider>
+      ) : !user ? (
+        <LoginForm />
+      ) : (
+        <SidebarProvider>
+          <div className="flex min-h-screen w-full bg-background">
+            <AppSidebar />
+            <div className="min-w-0 flex-1">
+              {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+              <Outlet />
+            </div>
+          </div>
+          <Toaster />
+        </SidebarProvider>
+      )}
     </QueryClientProvider>
   );
 }
