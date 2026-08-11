@@ -30,6 +30,7 @@ import argparse
 import datetime
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -53,6 +54,13 @@ REQUEST_DELAY_SECONDS = 2  # intervalo entre requisições ao rodar em lote
 # a sensibilidade desejada (também pode virar uma configuração por usuário
 # futuramente, ligada à tela /configuracoes).
 CHANGE_THRESHOLD_PCT = 1.0
+
+# Caminho padrão da service account, ancorado na pasta ONDE ESTÁ o próprio
+# scraper.py — não no diretório de onde o processo foi iniciado. Isso é
+# importante porque a API Node roda este script via spawn() a partir da
+# pasta /backend, então um caminho relativo simples ("serviceAccountKey.json")
+# procuraria (errado) dentro de /backend em vez de /scraper.
+DEFAULT_CRED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "serviceAccountKey.json")
 
 
 @dataclass
@@ -374,7 +382,7 @@ def main():
     parser.add_argument("--product-id", help="ID do produto no Firestore (usado com --url)")
     parser.add_argument("--target-price", type=float, help="Preço-alvo para alertas (usado com --url)")
     parser.add_argument(
-        "--cred", default="serviceAccountKey.json", help="Caminho da chave da conta de serviço"
+        "--cred", default=DEFAULT_CRED_PATH, help="Caminho da chave da conta de serviço"
     )
     args = parser.parse_args()
 

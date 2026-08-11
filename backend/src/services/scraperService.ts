@@ -31,7 +31,10 @@ export interface ScrapeRunResult {
 
 function runScraper(args: string[]): Promise<ScrapeRunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(PYTHON_BIN, [SCRAPER_PATH, ...args]);
+    // cwd = pasta do próprio scraper.py, não a pasta de onde a API foi
+    // iniciada (/backend) — evita que caminhos relativos dentro do script
+    // Python (como a service account) sejam resolvidos no lugar errado.
+    const child = spawn(PYTHON_BIN, [SCRAPER_PATH, ...args], { cwd: path.dirname(SCRAPER_PATH) });
 
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk.toString()));
