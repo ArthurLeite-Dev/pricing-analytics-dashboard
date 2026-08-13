@@ -1,28 +1,27 @@
-"""
-scraper.py — Coleta preços dos produtos monitorados e grava no Firestore.
+# scraper.py — Coleta preços dos produtos monitorados e grava no Firestore.
 
-Fluxo:
-    1. Lê os produtos da coleção `products` no Firestore (ou recebe uma
-       única URL avulsa via --url, usado pela API Node quando um link novo
-       é cadastrado pelo modal do front-end).
-    2. Faz o request HTTP e extrai preço, nome e imagem de cada página.
-    3. Compara com o preço anterior salvo, calcula a variação (changePct)
-       e o status ("queda" | "estavel" | "aumento").
-    4. Grava o produto atualizado + um novo ponto em priceHistory.
-    5. Se o preço cruzar o `targetPrice` definido pelo usuário, cria um
-       documento em `alerts`.
+# Fluxo:
+#     1. Lê os produtos da coleção `products` no Firestore (ou recebe uma
+#        única URL avulsa via --url, usado pela API Node quando um link novo
+#        é cadastrado pelo modal do front-end).
+#     2. Faz o request HTTP e extrai preço, nome e imagem de cada página.
+#     3. Compara com o preço anterior salvo, calcula a variação (changePct)
+#        e o status ("queda" | "estavel" | "aumento").
+#     4. Grava o produto atualizado + um novo ponto em priceHistory.
+#     5. Se o preço cruzar o `targetPrice` definido pelo usuário, cria um
+#        documento em `alerts`.
 
-Requisitos:
-    pip install requests beautifulsoup4 pandas firebase-admin --break-system-packages
+# Requisitos:
+#     pip install requests beautifulsoup4 pandas firebase-admin --break-system-packages
 
-Uso:
-    python scraper.py                              # coleta todos os produtos
-    python scraper.py --url https://loja.com/p/123  # coleta avulsa (sem doc ainda)
-    python scraper.py --product-id abc123           # recoleta um produto específico
+# Uso:
+#     python scraper.py                              # coleta todos os produtos
+#     python scraper.py --url https://loja.com/p/123  # coleta avulsa (sem doc ainda)
+#     python scraper.py --product-id abc123           # recoleta um produto específico
 
-Boas práticas: respeite o robots.txt e os termos de uso de cada loja, e
-ajuste REQUEST_DELAY_SECONDS para não sobrecarregar o site de origem.
-"""
+# Boas práticas: respeite o robots.txt e os termos de uso de cada loja, e
+# ajuste REQUEST_DELAY_SECONDS para não sobrecarregar o site de origem.
+
 
 from __future__ import annotations
 
@@ -61,6 +60,43 @@ CHANGE_THRESHOLD_PCT = 1.0
 # pasta /backend, então um caminho relativo simples ("serviceAccountKey.json")
 # procuraria (errado) dentro de /backend em vez de /scraper.
 DEFAULT_CRED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "serviceAccountKey.json")
+
+# Tamanho máximo do nome exibido antes de truncar (heurística, não é uma
+# limpeza "perfeita" por categoria de produto — veja clean_product_name).
+MAX_NAME_LENGTH = 60
+
+
+def clean_product_name(raw_name: Optional[str]) -> Optional[str]:
+    """
+    Encurta o nome bruto extraído da página (og:title costuma vir cheio de
+    specs, pensado para SEO, não para exibição). Faz duas coisas:
+
+    1) Remove o sufixo " - CÓDIGO-DO-SKU" do final, quando existe — padrão
+       muito comum em e-commerce (ex: "... - H510-RGB", "... - KF432C16BB1/16").
+    2) Se ainda estiver longo demais, trunca no limite de MAX_NAME_LENGTH,
+       preferindo cortar numa vírgula ou espaço (nunca no meio de uma palavra).
+
+    Isso é uma heurística geral — não sabe distinguir specs "importantes"
+    (ex: capacidade de uma memória RAM) de specs "descartáveis" (ex: cor de
+    um headset) por categoria de produto. Para casos específicos que ainda
+    ficarem longos ou estranhos, o ajuste fino é manual.
+    """
+    if not raw_name:
+        return raw_name
+
+    name = raw_name.strip()
+
+    if " - " in name:
+        name = name.rsplit(" - ", 1)[0].strip()
+
+    if len(name) <= MAX_NAME_LENGTH:
+        return name
+
+    truncated = name[:MAX_NAME_LENGTH]
+    cut = max(truncated.rfind(","), truncated.rfind(" "))
+    if cut > 20:  # evita cortar cedo demais se não achar um bom ponto de corte
+        truncated = truncated[:cut]
+    return truncated.rstrip(", ")
 
 
 @dataclass
@@ -223,6 +259,8 @@ def parse_product_info(soup: BeautifulSoup) -> tuple[Optional[str], Optional[str
         name = og_title["content"].strip()
     elif soup.title and soup.title.string:
         name = soup.title.string.strip()
+
+    name = clean_product_name(name)
 
     image = None
     og_image = soup.find("meta", attrs={"property": "og:image"})

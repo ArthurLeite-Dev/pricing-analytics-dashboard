@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Link2, Loader2 } from "lucide-react";
+import { Plus, Link2, Loader2, Tag } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import { createProduct } from "@/lib/api";
 export function AddLinkDialog() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
+  const [targetPrice, setTargetPrice] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -31,13 +32,25 @@ export function AddLinkDialog() {
       return;
     }
 
+    let parsedTarget: number | undefined;
+    if (targetPrice.trim()) {
+      parsedTarget = Number(targetPrice.replace(",", "."));
+      if (Number.isNaN(parsedTarget) || parsedTarget <= 0) {
+        setError("O preço alvo deve ser um número maior que zero.");
+        return;
+      }
+    }
+
     setError(null);
     setSubmitting(true);
     try {
       // Chama a API Node/Express (POST /api/products), que grava o produto
       // no Firestore e dispara a primeira coleta do script Python.
-      await createProduct({ url });
+      await createProduct(
+        parsedTarget !== undefined ? { url, targetPrice: parsedTarget } : { url },
+      );
       setUrl("");
+      setTargetPrice("");
       setOpen(false);
       toast.success("Link adicionado", {
         description: "Começamos a monitorar este produto — o preço aparece assim que a primeira coleta terminar.",
@@ -82,8 +95,26 @@ export function AddLinkDialog() {
                 disabled={submitting}
               />
             </div>
-            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="targetPrice">Preço alvo (opcional)</Label>
+            <div className="relative">
+              <Tag className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="targetPrice"
+                inputMode="decimal"
+                placeholder="Ex: 199.90"
+                className="pl-9"
+                value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Você recebe um alerta quando o preço cair até esse valor (ou passar dele).
+            </p>
+          </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
           <DialogFooter className="gap-2 sm:gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
               Cancelar
