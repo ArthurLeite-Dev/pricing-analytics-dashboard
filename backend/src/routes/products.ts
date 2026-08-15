@@ -1,26 +1,11 @@
 import { Router } from "express";
-import { z } from "zod";
 
 import { db } from "../firebaseAdmin";
+import { createProductSchema } from "../schemas/productSchema";
 import { triggerBatchScrape, triggerScrape } from "../services/scraperService";
+import { deriveStoreName } from "../utils/deriveStoreName";
 
 const router = Router();
-
-const createProductSchema = z.object({
-  url: z.string().url(),
-  name: z.string().min(1).optional(),
-  targetPrice: z.number().positive().optional(),
-});
-
-function deriveStoreName(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "");
-    const main = hostname.split(".")[0] || "Loja";
-    return main.charAt(0).toUpperCase() + main.slice(1);
-  } catch {
-    return "Loja";
-  }
-}
 
 // POST /api/products — recebe a URL enviada pelo modal "Adicionar novo link" do front-end.
 // Cria o documento no Firestore com status "pending" (aparece na hora, via onSnapshot)

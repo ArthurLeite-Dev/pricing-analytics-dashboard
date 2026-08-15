@@ -1,0 +1,5 @@
+# Dependências apenas para desenvolvimento/testes — não necessárias em
+# produção (por isso separadas do requirements.txt). Instale com:
+#   pip install -r requirements.txt -r requirements-dev.txt --break-system-packages
+-r requirements.txt
+pytest>=8,<9

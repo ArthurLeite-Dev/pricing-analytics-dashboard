@@ -174,11 +174,16 @@ def parse_price(soup: BeautifulSoup) -> Optional[float]:
     if price is not None:
         return price
 
+    # meta[property=product:price:amount] (Open Graph e-commerce) e
+    # meta[itemprop=price] seguem a mesma convenção do JSON-LD: valor
+    # numérico puro para leitura por máquina (ex: "149.90"), independente
+    # do idioma/local da página. Usa _plain_price_to_float — NÃO _to_float,
+    # que assumiria formato BR e transformaria "149.90" em 14990.0.
     meta_price = soup.find("meta", attrs={"property": "product:price:amount"}) or soup.find(
         "meta", attrs={"itemprop": "price"}
     )
     if meta_price and meta_price.get("content"):
-        value = _to_float(meta_price["content"])
+        value = _plain_price_to_float(meta_price["content"])
         if value is not None:
             return value
 
@@ -187,7 +192,16 @@ def parse_price(soup: BeautifulSoup) -> Optional[float]:
         "[itemprop='price'], [data-price]"
     )
     for el in candidates:
-        text = el.get("content") or el.get("data-price") or el.get_text()
+        # O atributo content= (schema.org Microdata) é a mesma convenção
+        # "de máquina" acima. data-price não é um atributo padronizado —
+        # cada loja formata do seu jeito — então continua no parser BR,
+        # assim como o texto visível (get_text), que é sempre localizado.
+        if el.get("content"):
+            value = _plain_price_to_float(el["content"])
+            if value is not None:
+                return value
+            continue
+        text = el.get("data-price") or el.get_text()
         value = _to_float(text)
         if value is not None:
             return value
@@ -231,18 +245,23 @@ def _extract_price_from_jsonld(data) -> Optional[float]:
     if isinstance(offers, dict):
         raw = offers.get("price") or offers.get("lowPrice")
         if raw is not None:
-            return _jsonld_price_to_float(raw)
+            return _plain_price_to_float(raw)
 
     if "price" in data:
-        return _jsonld_price_to_float(data["price"])
+        return _plain_price_to_float(data["price"])
 
     return None
 
 
-def _jsonld_price_to_float(raw) -> Optional[float]:
-    """Preços em JSON-LD já vêm em formato numérico puro (schema.org),
-    ex: "239.99" — ao contrário do formato brasileiro visível na página
-    (239,99), por isso NÃO usa o mesmo parser de _to_float."""
+def _plain_price_to_float(raw) -> Optional[float]:
+    """Converte um preço que já vem em formato numérico "de máquina" —
+    ponto como decimal, sem separador de milhar — usado por qualquer fonte
+    pensada para ser lida por software em vez de exibida na tela: JSON-LD,
+    meta[product:price:amount] (Open Graph), meta/elemento com
+    itemprop=price via atributo content=. Ex: "239.99".
+
+    É o oposto de _to_float, que assume o texto BR visível na página
+    (vírgula decimal, ponto de milhar, ex: "239,99" ou "1.239,99")."""
     if raw is None:
         return None
     try:

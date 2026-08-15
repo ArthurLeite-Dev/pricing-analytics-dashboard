@@ -32,3 +32,29 @@ export async function createProduct(input: CreateProductInput): Promise<CreatePr
 
   return response.json();
 }
+
+export interface RetryScrapeResponse {
+  id: string;
+  triggered: boolean;
+  /** Exit code do processo Python: 0 = ok, outro valor = terminou com erro
+   * mesmo que a requisição HTTP em si tenha respondido 200. */
+  exitCode: number | null;
+}
+
+/**
+ * Dispara manualmente uma nova coleta para um produto existente
+ * (POST /api/products/:id/scrape). A requisição só resolve quando o
+ * processo Python termina — não é fire-and-forget como createProduct.
+ */
+export async function retryScrape(productId: string): Promise<RetryScrapeResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/products/${productId}/scrape`, {
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error ?? `Falha ao disparar nova coleta (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}

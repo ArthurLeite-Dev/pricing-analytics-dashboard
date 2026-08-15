@@ -10,19 +10,24 @@ const SCRAPER_PATH = path.resolve(process.cwd(), process.env.SCRAPER_PATH || "..
 // Se PYTHON_BIN vier como um caminho (contém "/" ou "\"), resolve relativo
 // ao diretório de onde o processo foi iniciado; caso contrário, trata como
 // um comando de PATH (ex: "python3").
-function resolvePythonBin(): string {
-  const raw = process.env.PYTHON_BIN;
+//
+// Recebe env/platform/cwd como parâmetros (em vez de ler process.env e
+// os.platform() direto no corpo da função) só para poder ser testada com
+// combinações diferentes sem tocar em variáveis globais nem recarregar o
+// módulo — o comportamento em produção é idêntico ao de antes.
+export function resolvePythonBin(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, cwd: string): string {
+  const raw = env.PYTHON_BIN;
   if (raw && (raw.includes("/") || raw.includes("\\"))) {
-    return path.resolve(process.cwd(), raw);
+    return path.resolve(cwd, raw);
   }
   if (raw) return raw;
 
   const defaultRelative =
-    os.platform() === "win32" ? "../scraper/.venv/Scripts/python.exe" : "../scraper/.venv/bin/python";
-  return path.resolve(process.cwd(), defaultRelative);
+    platform === "win32" ? "../scraper/.venv/Scripts/python.exe" : "../scraper/.venv/bin/python";
+  return path.resolve(cwd, defaultRelative);
 }
 
-const PYTHON_BIN = resolvePythonBin();
+const PYTHON_BIN = resolvePythonBin(process.env, os.platform(), process.cwd());
 
 export interface ScrapeRunResult {
   code: number | null;

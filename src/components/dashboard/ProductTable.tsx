@@ -17,6 +17,7 @@ import { formatBRL, placeholderImage } from "@/lib/monitor-data";
 import type { Product, ProductStatus } from "@/lib/types";
 import { useProducts } from "@/hooks/useProducts";
 import { StatusBadge } from "./StatusBadge";
+import { ScrapeStatusIndicator } from "./ScrapeStatusIndicator";
 
 interface Props {
   limit?: number;
@@ -123,6 +124,7 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                         </span>
                       )}
                       <StatusBadge status={p.status} />
+                      <ScrapeStatusIndicator productId={p.id} status={p.scrapeStatus} />
                     </div>
                   </div>
                 </li>
@@ -178,7 +180,10 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                         {p.changePct != null ? `${p.changePct > 0 ? "+" : ""}${p.changePct.toFixed(1)}%` : "—"}
                       </TableCell>
                       <TableCell className="text-right">
-                        <StatusBadge status={p.status} />
+                        <div className="flex flex-col items-end gap-1">
+                          <StatusBadge status={p.status} />
+                          <ScrapeStatusIndicator productId={p.id} status={p.scrapeStatus} />
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

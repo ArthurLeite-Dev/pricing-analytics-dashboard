@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  scraper:
+    name: Scraper (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scraper
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Usa um venv (em vez de --break-system-packages) porque o Python
+      # "hosted" do runner do GitHub Actions não é um Python gerenciado
+      # pelo SO (PEP 668) — um venv também é mais próximo do que já é usado
+      # localmente neste projeto (veja PYTHON_BIN em scraperService.ts).
+      - name: Criar venv e instalar dependências
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Rodar testes
+        run: .venv/bin/pytest -v
+
+  backend:
+    name: Backend (vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Rodar testes
+        run: npm test
+
+      - name: Build (tsc)
+        run: npm run build
+
+  frontend:
+    name: Front-end (lint + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Instalar dependências
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build
+        run: bun run build
