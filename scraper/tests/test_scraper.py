@@ -1,9 +1,9 @@
 # Testes da lógica de negócio do scraper — parsing de preço/nome, cálculo
-# de variação e gravação no Firestore. Fora do escopo aqui, de propósito:
-# fetch_html (rede real), init_firebase (credenciais reais) e a
-# orquestração de run_batch/run_single/main — essas dependem de I/O externo
-# e ficam melhor cobertas por um teste manual/de integração do que por um
-# teste unitário com tudo mockado.
+# de variação, gravação no Firestore, robots.txt e a política de
+# retry/backoff de fetch_html (com requests.get e time.sleep mockados, sem
+# rede real). Fora do escopo aqui, de propósito: init_firebase (credenciais
+# reais) e a orquestração de run_batch/run_single/main — melhor cobertas
+# por um teste manual/de integração do que por um teste unitário.
 #
 # Rodar (a partir da pasta scraper/):
 #   pip install -r requirements.txt -r requirements-dev.txt --break-system-packages
@@ -122,9 +122,57 @@ def make_result(**overrides) -> scraper.ScrapeResult:
         currency="BRL",
         scraped_at=NOW,
         scrape_status="ok",
+        scrape_error=None,
     )
     defaults.update(overrides)
     return scraper.ScrapeResult(**defaults)
+
+
+@pytest.fixture(autouse=True)
+def _clear_robots_cache():
+    """_robots_cache é um dict no nível do módulo — sem isso, o resultado
+    de um teste (ex: origem bloqueada) podia vazar pro próximo teste que
+    usasse a mesma origem."""
+    scraper._robots_cache.clear()
+    yield
+    scraper._robots_cache.clear()
+
+
+class FakeResponse:
+    """Substitui requests.Response nos testes de fetch_html — só com o
+    que a função realmente lê (status_code / ok / text)."""
+
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+    @property
+    def ok(self):
+        return self.status_code < 400
+
+
+def _install_fake_get(monkeypatch, sequence):
+    """Substitui scraper.requests.get por uma função que devolve (ou
+    levanta) cada item de `sequence`, em ordem, uma vez por chamada — o
+    último item se repete se sobrar mais chamada que item na lista.
+    Retorna um dict {"n": total_de_chamadas} pra inspeção no teste."""
+    calls = {"n": 0}
+
+    def fake_get(url, headers=None, timeout=None):
+        i = min(calls["n"], len(sequence) - 1)
+        calls["n"] += 1
+        item = sequence[i]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(scraper.requests, "get", fake_get)
+    return calls
+
+
+def _no_sleep(monkeypatch):
+    """Evita esperar de verdade o backoff durante os testes."""
+    monkeypatch.setattr(scraper.time, "sleep", lambda seconds: None)
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +583,185 @@ def test_save_result_explicit_target_price_overrides_existing():
     scraper.save_result(db, result, target_price=300.0)
 
     assert db.products.docs["p4"]["targetPrice"] == 300.0
+
+
+def test_save_result_persists_scrape_error():
+    db = FakeDb()
+    result = make_result(product_id="p5", price=None, scrape_status="error", scrape_error="HTTP 403 (possível bloqueio anti-bot ou rate limit)")
+    scraper.save_result(db, result)
+
+    assert db.products.docs["p5"]["scrapeError"] == "HTTP 403 (possível bloqueio anti-bot ou rate limit)"
+
+
+def test_save_result_clears_stale_scrape_error_once_scrape_succeeds():
+    db = FakeDb(existing_products={"p6": {"store": "Loja Z", "scrapeError": "erro de uma coleta anterior"}})
+    result = make_result(product_id="p6", store="Loja Z", price=100.0, scrape_status="ok", scrape_error=None)
+    scraper.save_result(db, result)
+
+    assert db.products.docs["p6"]["scrapeError"] is None
+
+
+# ---------------------------------------------------------------------------
+# robots.txt
+# ---------------------------------------------------------------------------
+
+
+class FakeRobotParser:
+    def __init__(self, allowed: bool):
+        self._allowed = allowed
+
+    def can_fetch(self, user_agent, url):
+        return self._allowed
+
+
+def test_is_allowed_by_robots_delegates_to_parser_disallow(monkeypatch):
+    monkeypatch.setattr(scraper, "_get_robots_parser", lambda url: FakeRobotParser(allowed=False))
+    assert scraper.is_allowed_by_robots("https://loja.com/proibido") is False
+
+
+def test_is_allowed_by_robots_delegates_to_parser_allow(monkeypatch):
+    monkeypatch.setattr(scraper, "_get_robots_parser", lambda url: FakeRobotParser(allowed=True))
+    assert scraper.is_allowed_by_robots("https://loja.com/produto/1") is True
+
+
+def test_is_allowed_by_robots_fail_open_when_robots_txt_unavailable(monkeypatch):
+    # parser None = não deu pra buscar/ler o robots.txt -- não bloqueia a
+    # coleta por causa disso (fail-open, não fail-closed).
+    monkeypatch.setattr(scraper, "_get_robots_parser", lambda url: None)
+    assert scraper.is_allowed_by_robots("https://loja.com/produto/1") is True
+
+
+def test_get_robots_parser_caches_per_origin_not_per_url(monkeypatch):
+    call_count = {"n": 0}
+
+    def fake_read(self):
+        call_count["n"] += 1
+
+    monkeypatch.setattr(scraper.RobotFileParser, "read", fake_read)
+
+    scraper._get_robots_parser("https://loja.com/produto/1")
+    scraper._get_robots_parser("https://loja.com/produto/2")  # mesma origem
+    scraper._get_robots_parser("https://outraloja.com/x")  # origem diferente
+
+    assert call_count["n"] == 2  # 1 leitura por origem, não por URL
+
+
+def test_get_robots_parser_fail_open_on_read_error(monkeypatch):
+    def fake_read(self):
+        raise OSError("timeout buscando robots.txt")
+
+    monkeypatch.setattr(scraper.RobotFileParser, "read", fake_read)
+    assert scraper._get_robots_parser("https://loja.com/produto/1") is None
+
+
+# ---------------------------------------------------------------------------
+# fetch_html — retry/backoff
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_html_succeeds_on_first_try(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(monkeypatch, [FakeResponse(200, "<html>ok</html>")])
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html == "<html>ok</html>"
+    assert error is None
+    assert calls["n"] == 1
+
+
+def test_fetch_html_retries_connection_error_then_succeeds(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(
+        monkeypatch,
+        [scraper.requests.exceptions.ConnectionError("falhou"), FakeResponse(200, "<html>ok</html>")],
+    )
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html == "<html>ok</html>"
+    assert error is None
+    assert calls["n"] == 2
+
+
+def test_fetch_html_retries_5xx_then_succeeds(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(monkeypatch, [FakeResponse(503, "instável"), FakeResponse(200, "<html>ok</html>")])
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html == "<html>ok</html>"
+    assert calls["n"] == 2
+
+
+def test_fetch_html_gives_up_after_max_retries_on_persistent_timeout(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(monkeypatch, [scraper.requests.exceptions.Timeout("sempre falha")])
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html is None
+    assert error is not None
+    assert calls["n"] == scraper.MAX_FETCH_RETRIES
+
+
+def test_fetch_html_does_not_retry_on_403_or_429(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(monkeypatch, [FakeResponse(403, "bloqueado")])
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html is None
+    assert "403" in error
+    assert calls["n"] == 1  # não insiste contra um provável bloqueio
+
+
+def test_fetch_html_does_not_retry_on_other_4xx(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = _install_fake_get(monkeypatch, [FakeResponse(404, "não encontrado")])
+
+    html, error = scraper.fetch_html("https://loja.com/x")
+
+    assert html is None
+    assert calls["n"] == 1  # 404 não é transitório, retry não ajudaria
+
+
+# ---------------------------------------------------------------------------
+# scrape_url — integração da checagem de robots.txt (fetch_html mockado,
+# sem rede real)
+# ---------------------------------------------------------------------------
+
+
+def test_scrape_url_short_circuits_when_robots_disallows(monkeypatch):
+    monkeypatch.setattr(scraper, "is_allowed_by_robots", lambda url: False)
+
+    def fail_if_called(url):
+        raise AssertionError("fetch_html não deveria ser chamado quando o robots.txt bloqueia")
+
+    monkeypatch.setattr(scraper, "fetch_html", fail_if_called)
+
+    result = scraper.scrape_url("p1", "https://loja.com/proibido")
+
+    assert result.scrape_status == "error"
+    assert result.price is None
+    assert "robots.txt" in result.scrape_error.lower()
+
+
+def test_scrape_url_sets_scrape_error_hint_when_price_not_found(monkeypatch):
+    monkeypatch.setattr(scraper, "is_allowed_by_robots", lambda url: True)
+    monkeypatch.setattr(scraper, "fetch_html", lambda url: ("<html><body>sem preço aqui</body></html>", None))
+
+    result = scraper.scrape_url("p1", "https://loja.com/x")
+
+    assert result.scrape_status == "not_found"
+    assert result.scrape_error  # alguma mensagem, não vazia/None
+
+
+def test_scrape_url_propagates_fetch_error_reason(monkeypatch):
+    monkeypatch.setattr(scraper, "is_allowed_by_robots", lambda url: True)
+    monkeypatch.setattr(scraper, "fetch_html", lambda url: (None, "HTTP 403 (possível bloqueio anti-bot ou rate limit)"))
+
+    result = scraper.scrape_url("p1", "https://loja.com/x")
+
+    assert result.scrape_status == "error"
+    assert result.scrape_error == "HTTP 403 (possível bloqueio anti-bot ou rate limit)"

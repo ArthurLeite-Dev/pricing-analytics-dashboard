@@ -19,8 +19,9 @@
 #     python scraper.py --url https://loja.com/p/123  # coleta avulsa (sem doc ainda)
 #     python scraper.py --product-id abc123           # recoleta um produto específico
 
-# Boas práticas: respeite o robots.txt e os termos de uso de cada loja, e
-# ajuste REQUEST_DELAY_SECONDS para não sobrecarregar o site de origem.
+# Boas práticas: REQUEST_DELAY_SECONDS controla o intervalo entre produtos
+# no lote; is_allowed_by_robots() checa o robots.txt de cada loja antes de
+# coletar (fail-open: se não der pra buscar o robots.txt, não bloqueia).
 
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 
 import firebase_admin
 import pandas as pd
@@ -44,9 +46,22 @@ from firebase_admin import credentials, firestore
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("scraper")
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; PriceWatchBot/1.0)"}
+# User-Agent que nos IDENTIFICA como bot -- de propósito não finge ser um
+# navegador comum. É o mesmo valor usado tanto no header HTTP (fetch_html)
+# quanto na checagem de robots.txt (is_allowed_by_robots): se algum dia
+# precisar trocar, troca só aqui.
+USER_AGENT = "Mozilla/5.0 (compatible; PriceWatchBot/1.0)"
+HEADERS = {"User-Agent": USER_AGENT}
 REQUEST_TIMEOUT = 15
 REQUEST_DELAY_SECONDS = 2  # intervalo entre requisições ao rodar em lote
+
+# Retry/backoff para falhas de rede TRANSITÓRIAS (timeout, erro de conexão,
+# 5xx) dentro de uma única URL -- não confundir com REQUEST_DELAY_SECONDS
+# acima, que é o intervalo ENTRE produtos diferentes no lote. 403/429
+# (provável bloqueio/rate limit) e outros 4xx não entram nesse retry — ver
+# fetch_html().
+MAX_FETCH_RETRIES = 3
+FETCH_BACKOFF_BASE_SECONDS = 2  # backoff exponencial: 2s, 4s, ...
 
 # Variação mínima (%) para considerar o preço "em queda" ou "em aumento";
 # abaixo disso o produto é classificado como "estavel". Ajuste conforme
@@ -110,6 +125,10 @@ class ScrapeResult:
     currency: str
     scraped_at: datetime.datetime
     scrape_status: str  # "ok" | "error" | "not_found"
+    # Motivo legível quando scrape_status != "ok" (robots.txt, timeout,
+    # bloqueio anti-bot, HTTP xxx, preço não encontrado...). Campo novo com
+    # default None -- não quebra nenhuma construção posicional existente.
+    scrape_error: Optional[str] = None
 
 
 def init_firebase(cred_path: str = "serviceAccountKey.json"):
@@ -129,14 +148,89 @@ def derive_store_name(url: str) -> str:
     return main.capitalize() or "Loja"
 
 
-def fetch_html(url: str) -> Optional[str]:
+_robots_cache: dict[str, Optional[RobotFileParser]] = {}
+
+
+def _get_robots_parser(url: str) -> Optional[RobotFileParser]:
+    """Busca e cacheia o robots.txt do domínio de `url` — uma vez por
+    domínio (origin), não uma vez por produto/URL. Retorna None se não
+    der pra buscar/ler (fail-open: tratado como "permitido" por
+    is_allowed_by_robots, não como "tudo proibido")."""
+    parsed = urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if origin in _robots_cache:
+        return _robots_cache[origin]
+
+    parser = RobotFileParser()
+    parser.set_url(f"{origin}/robots.txt")
     try:
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as exc:
-        logger.error("Falha ao buscar %s: %s", url, exc)
+        parser.read()
+    except Exception as exc:  # robots.txt é best-effort, qualquer falha aqui não deve derrubar a coleta
+        logger.warning("Não foi possível ler robots.txt de %s: %s", origin, exc)
+        _robots_cache[origin] = None
         return None
+
+    _robots_cache[origin] = parser
+    return parser
+
+
+def is_allowed_by_robots(url: str) -> bool:
+    """True se o robots.txt do site permite (ou não diz nada sobre)
+    coletar essa URL com o nosso User-Agent (USER_AGENT)."""
+    parser = _get_robots_parser(url)
+    if parser is None:
+        return True
+    try:
+        return parser.can_fetch(USER_AGENT, url)
+    except Exception:
+        return True
+
+
+def fetch_html(url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Busca o HTML da página, com retry/backoff só para falhas TRANSITÓRIAS.
+    Retorna (html, motivo_da_falha) — quando html é None, motivo_da_falha
+    é uma descrição curta da causa (guardada depois em
+    ScrapeResult.scrape_error).
+
+    Política de retry (nem toda falha merece retry):
+      - timeout / erro de conexão / 5xx -> transitório, tenta de novo com
+        backoff exponencial (2s, 4s, ...), até MAX_FETCH_RETRIES vezes.
+      - 403 / 429 -> provável bloqueio de anti-bot ou rate limit; insistir
+        imediatamente tende a piorar a situação, não resolver — registra e
+        desiste na hora, sem consumir as tentativas restantes.
+      - outros 4xx (404, 410...) -> não é transitório, retry não muda nada.
+    """
+    last_error = "motivo desconhecido"
+
+    for attempt in range(1, MAX_FETCH_RETRIES + 1):
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as exc:
+            last_error = f"erro de conexão: {exc}"
+            logger.warning("Tentativa %d/%d falhou para %s: %s", attempt, MAX_FETCH_RETRIES, url, exc)
+        else:
+            if response.ok:
+                return response.text, None
+
+            if response.status_code in (403, 429):
+                last_error = f"HTTP {response.status_code} (possível bloqueio anti-bot ou rate limit)"
+                logger.warning("%s — %s (não tentando de novo, não é falha transitória)", url, last_error)
+                return None, last_error
+
+            if response.status_code < 500:
+                last_error = f"HTTP {response.status_code}"
+                logger.warning("%s — %s (não tentando de novo, não é falha transitória)", url, last_error)
+                return None, last_error
+
+            last_error = f"HTTP {response.status_code} (erro no servidor da loja)"
+            logger.warning("Tentativa %d/%d: %s — %s", attempt, MAX_FETCH_RETRIES, url, last_error)
+
+        if attempt < MAX_FETCH_RETRIES:
+            time.sleep(FETCH_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+
+    logger.error("Falha ao buscar %s após %d tentativas: %s", url, MAX_FETCH_RETRIES, last_error)
+    return None, last_error
 
 
 def _to_float(raw: Optional[str]) -> Optional[float]:
@@ -290,19 +384,29 @@ def parse_product_info(soup: BeautifulSoup) -> tuple[Optional[str], Optional[str
 
 
 def scrape_url(product_id: str, url: str) -> ScrapeResult:
-    html = fetch_html(url)
     now = datetime.datetime.now(datetime.timezone.utc)
+    store = derive_store_name(url)
+
+    if not is_allowed_by_robots(url):
+        logger.warning("robots.txt não permite coletar %s — pulando.", url)
+        return ScrapeResult(
+            product_id, url, None, None, store, None, "BRL", now, "error",
+            scrape_error="Bloqueado pelo robots.txt desta loja.",
+        )
+
+    html, fetch_error = fetch_html(url)
 
     if html is None:
-        return ScrapeResult(product_id, url, None, None, derive_store_name(url), None, "BRL", now, "error")
+        return ScrapeResult(product_id, url, None, None, store, None, "BRL", now, "error", scrape_error=fetch_error)
 
     soup = BeautifulSoup(html, "html.parser")
     price = parse_price(soup)
     name, image = parse_product_info(soup)
     status = "ok" if price is not None else "not_found"
+    scrape_error = None if price is not None else "Página carregou, mas o preço não foi encontrado nela."
 
     return ScrapeResult(
-        product_id, url, name, image, derive_store_name(url), price, "BRL", now, status
+        product_id, url, name, image, store, price, "BRL", now, status, scrape_error=scrape_error
     )
 
 
@@ -360,6 +464,10 @@ def save_result(db, result: ScrapeResult, target_price: Optional[float] = None):
         "store": existing.get("store") or result.store,
         "currency": result.currency,
         "scrapeStatus": result.scrape_status,
+        # Sempre incluído (mesmo quando None) -- é o que faz um erro salvo
+        # numa coleta anterior ser limpo automaticamente assim que uma
+        # coleta seguinte der certo, em vez de ficar preso pra sempre.
+        "scrapeError": result.scrape_error,
         "lastUpdated": firestore.SERVER_TIMESTAMP,
     }
     if result.name:
