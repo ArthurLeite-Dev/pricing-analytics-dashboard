@@ -94,6 +94,21 @@ describe("POST /api/products", () => {
     expect(triggerScrapeMock).not.toHaveBeenCalled();
   });
 
+  it("salva o groupId quando enviado, e null quando omitido", async () => {
+    const app = buildApp();
+
+    const comGrupo = await request(app)
+      .post("/api/products")
+      .send({ url: "https://loja.com/produto/1", groupId: "iPhone 15 Pro 256GB" });
+    const semGrupo = await request(app).post("/api/products").send({ url: "https://loja.com/produto/2" });
+
+    const storedComGrupo = await fakeDb.collection("products").doc(comGrupo.body.id).get();
+    const storedSemGrupo = await fakeDb.collection("products").doc(semGrupo.body.id).get();
+
+    expect((storedComGrupo.data() as { groupId: string | null }).groupId).toBe("iPhone 15 Pro 256GB");
+    expect((storedSemGrupo.data() as { groupId: string | null }).groupId).toBeNull();
+  });
+
   it("rejeita targetPrice negativo (400)", async () => {
     const res = await request(buildApp())
       .post("/api/products")

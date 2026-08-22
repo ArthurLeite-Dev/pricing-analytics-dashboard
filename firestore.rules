@@ -7,7 +7,9 @@ rules_version = '2';
 //   feita SOMENTE pelo Admin SDK (script Python + API Node/Express), que
 //   roda com uma service account e por isso IGNORA estas regras. Por isso
 //   o cliente (front-end) não tem permissão de escrever esses campos.
-// - O usuário autenticado pode ajustar o `targetPrice` de um produto e
+// - O usuário autenticado pode ajustar o `targetPrice` e o `groupId` de um
+//   produto (groupId é só um rótulo pra agrupar "o mesmo item" em lojas
+//   diferentes no comparativo — não precisa de lógica de servidor) e
 //   marcar um alerta como lido (`read`) diretamente do front-end.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -15,7 +17,7 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if isSignedIn();
       allow create: if false; // criação só via API Node (Admin SDK)
-      allow update: if isSignedIn() && onlyUpdatingFields(["targetPrice"]);
+      allow update: if isSignedIn() && onlyUpdatingFields(["targetPrice", "groupId"]);
       allow delete: if false; // exclusão só via API Node (Admin SDK)
 
       match /priceHistory/{entryId} {

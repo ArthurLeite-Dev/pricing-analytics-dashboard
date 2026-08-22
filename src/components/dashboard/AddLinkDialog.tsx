@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Link2, Loader2, Tag } from "lucide-react";
+import { Plus, Link2, Loader2, Tag, Tags } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ export function AddLinkDialog() {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [targetPrice, setTargetPrice] = useState("");
+  const [groupId, setGroupId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -46,11 +47,14 @@ export function AddLinkDialog() {
     try {
       // Chama a API Node/Express (POST /api/products), que grava o produto
       // no Firestore e dispara a primeira coleta do script Python.
-      await createProduct(
-        parsedTarget !== undefined ? { url, targetPrice: parsedTarget } : { url },
-      );
+      await createProduct({
+        url,
+        ...(parsedTarget !== undefined ? { targetPrice: parsedTarget } : {}),
+        ...(groupId.trim() ? { groupId: groupId.trim() } : {}),
+      });
       setUrl("");
       setTargetPrice("");
+      setGroupId("");
       setOpen(false);
       toast.success("Link adicionado", {
         description: "Começamos a monitorar este produto — o preço aparece assim que a primeira coleta terminar.",
@@ -112,6 +116,24 @@ export function AddLinkDialog() {
             </div>
             <p className="text-xs text-muted-foreground">
               Você recebe um alerta quando o preço cair até esse valor (ou passar dele).
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="groupId">Grupo (opcional)</Label>
+            <div className="relative">
+              <Tags className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="groupId"
+                placeholder="Ex: iPhone 15 Pro 256GB"
+                className="pl-9"
+                value={groupId}
+                onChange={(e) => setGroupId(e.target.value)}
+                disabled={submitting}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Use o mesmo nome em produtos que são o mesmo item em lojas diferentes — eles aparecem
+              juntos no comparativo entre lojas. Dá pra editar isso depois na tabela.
             </p>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}

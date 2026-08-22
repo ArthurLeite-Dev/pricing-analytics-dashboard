@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
+import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,10 +15,12 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatBRL, placeholderImage } from "@/lib/monitor-data";
+import { updateProductGroup } from "@/lib/firestoreActions";
 import type { Product, ProductStatus } from "@/lib/types";
 import { useProducts } from "@/hooks/useProducts";
 import { StatusBadge } from "./StatusBadge";
 import { ScrapeStatusIndicator } from "./ScrapeStatusIndicator";
+import { GroupPicker } from "./GroupPicker";
 
 interface Props {
   limit?: number;
@@ -33,6 +36,23 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
   const { products: fetchedProducts, loading } = useProducts(externalProducts === undefined);
   const products = externalProducts ?? fetchedProducts;
   const stores = useMemo(() => Array.from(new Set(products.map((p) => p.store))), [products]);
+  const existingGroups = useMemo(
+    () =>
+      Array.from(new Set(products.map((p) => p.groupId).filter((g): g is string => g != null))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [products],
+  );
+
+  const handleGroupChange = async (productId: string, groupId: string | null) => {
+    try {
+      await updateProductGroup(productId, groupId);
+    } catch (err) {
+      toast.error("Não foi possível atualizar o grupo", {
+        description: err instanceof Error ? err.message : "Tente novamente.",
+      });
+    }
+  };
 
   const rows = useMemo(() => {
     const filtered = products.filter((p) => {
@@ -126,6 +146,13 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                       <StatusBadge status={p.status} />
                       <ScrapeStatusIndicator productId={p.id} status={p.scrapeStatus} />
                     </div>
+                    <div className="pt-1">
+                      <GroupPicker
+                        value={p.groupId}
+                        existingGroups={existingGroups}
+                        onChange={(groupId) => handleGroupChange(p.id, groupId)}
+                      />
+                    </div>
                   </div>
                 </li>
               ))}
@@ -143,6 +170,7 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                   <TableRow>
                     <TableHead>Produto</TableHead>
                     <TableHead>Loja</TableHead>
+                    <TableHead>Grupo</TableHead>
                     <TableHead className="text-right">Preço atual</TableHead>
                     <TableHead className="text-right">Preço alvo</TableHead>
                     <TableHead className="text-right">Variação</TableHead>
@@ -164,6 +192,13 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                         </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{p.store}</TableCell>
+                      <TableCell>
+                        <GroupPicker
+                          value={p.groupId}
+                          existingGroups={existingGroups}
+                          onChange={(groupId) => handleGroupChange(p.id, groupId)}
+                        />
+                      </TableCell>
                       <TableCell className="text-right font-semibold">
                         {p.currentPrice != null ? formatBRL(p.currentPrice) : "—"}
                       </TableCell>
@@ -189,7 +224,7 @@ export function ProductTable({ limit, products: externalProducts }: Props) {
                   ))}
                   {rows.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                      <TableCell colSpan={7} className="py-10 text-center text-muted-foreground">
                         Nenhum produto encontrado.
                       </TableCell>
                     </TableRow>

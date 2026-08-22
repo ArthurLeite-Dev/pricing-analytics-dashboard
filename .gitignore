@@ -27,8 +27,9 @@ serviceAccountKey.json
 
 # Scraper Python
 scraper/.venv
-scraper/__pycache__
-scraper/*.pyc
+__pycache__
+*.pyc
+.pytest_cache
 
 # Cache de build do TypeScript
 *.tsbuildinfo

@@ -9,6 +9,7 @@ export interface CreateProductInput {
   url: string;
   name?: string;
   targetPrice?: number;
+  groupId?: string;
 }
 
 export interface CreateProductResponse {

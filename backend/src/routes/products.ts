@@ -16,7 +16,7 @@ router.post("/", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
-  const { url, name, targetPrice } = parsed.data;
+  const { url, name, targetPrice, groupId } = parsed.data;
   const store = deriveStoreName(url);
   const docRef = db.collection("products").doc();
 
@@ -32,6 +32,7 @@ router.post("/", async (req, res) => {
     status: "estavel",
     currency: "BRL",
     scrapeStatus: "pending",
+    groupId: groupId ?? null,
     createdAt: new Date(),
     lastUpdated: null,
   });

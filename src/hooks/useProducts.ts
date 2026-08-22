@@ -42,6 +42,7 @@ export function useProducts(enabled = true) {
               status: data.status ?? "estavel",
               currency: data.currency ?? "BRL",
               scrapeStatus: data.scrapeStatus ?? "pending",
+              groupId: data.groupId ?? null,
               createdAt: data.createdAt?.toDate?.() ?? null,
               lastUpdated: data.lastUpdated?.toDate?.() ?? null,
             } as Product;

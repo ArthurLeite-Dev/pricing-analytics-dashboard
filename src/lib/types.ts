@@ -24,6 +24,13 @@ export interface Product {
   status: ProductStatus;
   currency: string;
   scrapeStatus: ScrapeStatus;
+  /**
+   * Nome do grupo ao qual este produto pertence. Produtos com o mesmo
+   * groupId são tratados como "o mesmo item" cadastrado em lojas
+   * diferentes, e aparecem juntos no comparativo entre lojas
+   * (StoreComparisonChart). null = produto avulso, sem grupo.
+   */
+  groupId: string | null;
   createdAt: Date | null;
   lastUpdated: Date | null;
 }
@@ -34,10 +41,12 @@ export interface PricePoint {
   price: number;
 }
 
-/** Preço médio atual por loja, usado no gráfico comparativo. */
+/** Um produto dentro de um grupo (mesmo item, lojas diferentes), usado no gráfico comparativo. */
 export interface StoreComparisonPoint {
+  productId: string;
   store: string;
   price: number;
+  name: string;
 }
 
 export interface Alert {

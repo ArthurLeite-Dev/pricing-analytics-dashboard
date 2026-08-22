@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -11,6 +12,13 @@ import {
 } from "recharts";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBRL } from "@/lib/monitor-data";
 import type { Product, StoreComparisonPoint } from "@/lib/types";
@@ -107,23 +115,42 @@ export function PriceTrendChart({ products: externalProducts }: ChartProps = {})
   );
 }
 
-/** Agrupa os produtos monitorados por loja e calcula o preço atual médio de cada uma. */
-function buildStoreComparison(products: Product[]): StoreComparisonPoint[] {
-  const byStore = new Map<string, { total: number; count: number }>();
+interface ProductGroup {
+  groupId: string;
+  members: Product[];
+}
+
+/**
+ * Agrupa os produtos que compartilham groupId — o mesmo item cadastrado
+ * em lojas diferentes (ver GroupPicker/ProductTable). Só entram grupos
+ * com 2+ membros: 1 produto sozinho não é uma comparação entre lojas.
+ */
+function buildProductGroups(products: Product[]): ProductGroup[] {
+  const byGroup = new Map<string, Product[]>();
 
   for (const p of products) {
-    if (p.currentPrice == null) continue;
-    const key = p.store || "Outra loja";
-    const entry = byStore.get(key) ?? { total: 0, count: 0 };
-    entry.total += p.currentPrice;
-    entry.count += 1;
-    byStore.set(key, entry);
+    if (!p.groupId) continue;
+    const members = byGroup.get(p.groupId) ?? [];
+    members.push(p);
+    byGroup.set(p.groupId, members);
   }
 
-  return Array.from(byStore.entries()).map(([store, { total, count }]) => ({
-    store,
-    price: Math.round((total / count) * 100) / 100,
-  }));
+  return Array.from(byGroup.entries())
+    .filter(([, members]) => members.length >= 2)
+    .map(([groupId, members]) => ({ groupId, members }))
+    .sort((a, b) => a.groupId.localeCompare(b.groupId));
+}
+
+/** Preço atual de cada membro de um grupo, um ponto por loja. */
+function buildStoreComparison(members: Product[]): StoreComparisonPoint[] {
+  return members
+    .filter((p): p is Product & { currentPrice: number } => p.currentPrice != null)
+    .map((p) => ({
+      productId: p.id,
+      store: p.store || "Outra loja",
+      price: p.currentPrice,
+      name: p.name,
+    }));
 }
 
 export function StoreComparisonChart({ products: externalProducts }: ChartProps = {}) {
@@ -132,20 +159,53 @@ export function StoreComparisonChart({ products: externalProducts }: ChartProps 
   );
   const products = externalProducts ?? fetchedProducts;
   const loading = externalProducts === undefined && loadingProducts;
-  const data = buildStoreComparison(products);
+
+  const groups = useMemo(() => buildProductGroups(products), [products]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | undefined>(undefined);
+
+  // O grupo escolhido manualmente, se ainda existir na lista; senão o
+  // primeiro disponível — sem precisar sincronizar via useEffect.
+  const selectedGroup = groups.find((g) => g.groupId === selectedGroupId) ?? groups[0];
+  const data = selectedGroup ? buildStoreComparison(selectedGroup.members) : [];
 
   return (
     <Card className="border-border/70 shadow-[var(--shadow-elegant)]">
-      <CardHeader>
-        <CardTitle className="text-base">Comparativo entre lojas</CardTitle>
-        <CardDescription>Preço médio atual dos produtos monitorados, por loja</CardDescription>
+      <CardHeader className="gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="grid gap-1">
+            <CardTitle className="text-base">Comparativo entre lojas</CardTitle>
+            <CardDescription>
+              {selectedGroup
+                ? `Preço de "${selectedGroup.groupId}" em cada loja monitorada`
+                : "Preço do mesmo item em lojas diferentes"}
+            </CardDescription>
+          </div>
+          {groups.length > 1 && (
+            <Select value={selectedGroup?.groupId} onValueChange={setSelectedGroupId}>
+              <SelectTrigger className="h-8 w-[170px] text-xs">
+                <SelectValue placeholder="Escolha um grupo" />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map((g) => (
+                  <SelectItem key={g.groupId} value={g.groupId}>
+                    {g.groupId}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="h-[260px] px-2 sm:px-4">
         {loading ? (
           <Skeleton className="h-full w-full" />
-        ) : data.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
-            Nenhum produto monitorado ainda.
+        ) : groups.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center text-sm text-muted-foreground">
+            <p>Nenhum grupo de comparação ainda.</p>
+            <p className="text-xs">
+              Marque 2 ou mais produtos como o mesmo item ("Agrupar produto" na tabela) pra comparar
+              o preço deles aqui.
+            </p>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
@@ -158,7 +218,13 @@ export function StoreComparisonChart({ products: externalProducts }: ChartProps 
                 domain={["dataMin - 250", "dataMax + 250"]}
                 tickFormatter={(v: number) => `R$${Math.round(v)}`}
               />
-              <Tooltip {...tooltipStyle} formatter={(v: number) => [formatBRL(v), "Preço"]} />
+              <Tooltip
+                {...tooltipStyle}
+                formatter={(v: number, _name: string, item: { payload?: { name?: string } }) => [
+                  formatBRL(v),
+                  item?.payload?.name ?? "Preço",
+                ]}
+              />
               <Bar dataKey="price" fill="var(--chart-2)" radius={[8, 8, 0, 0]} maxBarSize={48} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>

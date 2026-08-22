@@ -7,13 +7,18 @@ describe("createProductSchema", () => {
     expect(createProductSchema.safeParse({ url: "https://loja.com/produto" }).success).toBe(true);
   });
 
-  it("aceita name e targetPrice opcionais quando presentes e válidos", () => {
+  it("aceita name, targetPrice e groupId opcionais quando presentes e válidos", () => {
     const result = createProductSchema.safeParse({
       url: "https://loja.com/produto",
       name: "Produto X",
       targetPrice: 199.9,
+      groupId: "iPhone 15 Pro 256GB",
     });
     expect(result.success).toBe(true);
+  });
+
+  it("rejeita groupId vazio quando explicitamente enviado", () => {
+    expect(createProductSchema.safeParse({ url: "https://loja.com/x", groupId: "" }).success).toBe(false);
   });
 
   it("rejeita quando a url está ausente", () => {
